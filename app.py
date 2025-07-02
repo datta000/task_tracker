@@ -7,65 +7,72 @@ app = Flask(__name__)
 def get_db_connection():
     try:
         connection = mysql.connector.connect(
-            host='localhost',
+            host='127.0.0.1',
             user='root',
             password='ritaban',
-            database='task_tracker'
+            database='task_tracker',
+            connection_timeout=5  # ⏱️ Prevent hanging forever
         )
         return connection
     except Error as e:
-        print("Error connecting to MySQL:", e)
+        print("❌ Error connecting to MySQL:", e)
         return None
-
-@app.route('/ping', methods=['GET'])
-def ping():
-    return jsonify({"message": "pong"}), 200
-
-@app.route('/tasks', methods=['GET'])
-def get_tasks():
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
-    tasks = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(tasks), 200
 
 @app.route('/tasks', methods=['POST'])
 def create_task():
-    data = request.get_json()
-    if not data or 'title' not in data or not data['title'].strip():
-        return jsonify({"error": "Title is required"}), 400
+    try:
+        print("🔧 POST /tasks called")
 
-    title = data['title'].strip()
-    description = data.get('description', '')
-    status = data.get('status', 'pending')
+        data = request.get_json()
+        print("✅ Data received:", data)
 
-    if status not in ['pending', 'completed']:
-        return jsonify({"error": "Invalid status"}), 400
+        title = data.get('title')
+        description = data.get('description', '')
+        status = data.get('status', 'pending')
 
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
+        print("📦 Extracted:", title, description, status)
 
-    cursor = conn.cursor()
-    sql = "INSERT INTO tasks (title, description, status) VALUES (%s, %s, %s)"
-    values = (title, description, status)
-    cursor.execute(sql, values)
-    conn.commit()
-    task_id = cursor.lastrowid
-    cursor.close()
-    conn.close()
+        if not title:
+            print("❌ Title is missing")
+            return jsonify({'error': 'Title is required'}), 400
 
-    return jsonify({
-        "id": task_id,
-        "title": title,
-        "description": description,
-        "status": status
-    }), 201
+        if status not in ['pending', 'completed']:
+            print("❌ Invalid status")
+            return jsonify({'error': 'Invalid status'}), 400
+
+        print("🔌 Connecting to DB...")
+        conn = get_db_connection()
+        if conn is None:
+            print("❌ DB connection failed")
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        cursor = conn.cursor()
+
+        print("📝 Inserting into DB...")
+        query = """
+            INSERT INTO tasks (title, description, status)
+            VALUES (%s, %s, %s)
+        """
+        cursor.execute(query, (title, description, status))
+        conn.commit()
+
+        task_id = cursor.lastrowid
+        print(f"✅ Task inserted with ID: {task_id}")
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'id': task_id,
+            'title': title,
+            'description': description,
+            'status': status
+        }), 201
+
+    except Exception as e:
+        print("💥 Error in POST /tasks:", e)
+        return jsonify({'error': 'Internal server error'}), 500
+
 
 @app.route('/tasks/<int:task_id>', methods=['PUT'])
 def update_task(task_id):
