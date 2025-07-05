@@ -124,26 +124,6 @@ def update_task(task_id):
 
     return jsonify({"message": "Task updated successfully"}), 200
 
-@app.route('/tasks/<int:task_id>', methods=['DELETE'])
-def delete_task(task_id):
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
-    task = cursor.fetchone()
-    if not task:
-        cursor.close()
-        conn.close()
-        return jsonify({"error": "Task not found"}), 404
-
-    cursor.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    return jsonify({"message": f"Task {task_id} deleted successfully"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
