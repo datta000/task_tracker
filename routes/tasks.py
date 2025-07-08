@@ -1,9 +1,29 @@
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
+import jwt
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
 
 tasks_bp = Blueprint('tasks', __name__)
 
-# GET /tasks - Fetch all tasks
+# 🔐 JWT token verification
+def verify_token():
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    try:
+        token = auth_header.split(" ")[1]
+        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return decoded["user_id"]
+    except jwt.ExpiredSignatureError:
+        return "expired"
+    except Exception:
+        return None
+
+# ✅ GET /tasks - Fetch all tasks
 @tasks_bp.route('/tasks', methods=['GET'])
 def get_tasks():
     try:
@@ -17,7 +37,7 @@ def get_tasks():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# GET /tasks/<id> - Fetch task by ID
+# ✅ GET /tasks/<id> - Fetch task by ID
 @tasks_bp.route('/tasks/<int:task_id>', methods=['GET'])
 def get_task(task_id):
     try:
@@ -34,9 +54,15 @@ def get_task(task_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# POST /tasks - Create a new task
+# ✅ POST /tasks - Create a new task (🔐 Protected)
 @tasks_bp.route('/tasks', methods=['POST'])
 def create_task():
+    user_id = verify_token()
+    if user_id is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    if user_id == "expired":
+        return jsonify({"error": "Token expired"}), 401
+
     try:
         data = request.get_json()
         title = data.get("title")
@@ -65,9 +91,15 @@ def create_task():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# PUT /tasks/<id> - Update an existing task
+# ✅ PUT /tasks/<id> - Update a task (🔐 Protected)
 @tasks_bp.route('/tasks/<int:task_id>', methods=['PUT'])
 def update_task(task_id):
+    user_id = verify_token()
+    if user_id is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    if user_id == "expired":
+        return jsonify({"error": "Token expired"}), 401
+
     try:
         data = request.get_json()
         title = data.get("title")
@@ -91,9 +123,15 @@ def update_task(task_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# DELETE /tasks/<id> - Delete a task
+# ✅ DELETE /tasks/<id> - Delete a task (🔐 Protected)
 @tasks_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
 def delete_task(task_id):
+    user_id = verify_token()
+    if user_id is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    if user_id == "expired":
+        return jsonify({"error": "Token expired"}), 401
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
