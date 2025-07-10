@@ -17,22 +17,27 @@ def register():
     data = request.get_json()
     username = data.get("username")
     password = data.get("password")
+    role = data.get("role", "user")  # default to user
 
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
 
-    hashed_password = generate_password_hash(password)
-
     try:
+        # Hash the password before storing it
+        hashed_password = generate_password_hash(password)
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
+                       (username, hashed_password, role))
         conn.commit()
         cursor.close()
         conn.close()
+
         return jsonify({"message": "User registered successfully"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # Login route
 @auth_bp.route('/login', methods=['POST'])
@@ -55,6 +60,7 @@ def login():
         if user and check_password_hash(user["password"], password):
             payload = {
                 "user_id": user["id"],
+                "role": user["role"], 
                 "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
             }
             token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
@@ -64,3 +70,4 @@ def login():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
