@@ -33,16 +33,3 @@ def role_required(required_role):
         return wrapper
     return decorator
 
-
-
-tasks_bp = Blueprint('tasks', __name__)
-
-@tasks_bp.route('/admin-only', methods=['GET'])
-@role_required('admin')  # 👈 Only admin can access
-def admin_route():
-    return jsonify({"message": "Hello Admin! You have access."})
-
-@tasks_bp.route('/user-task', methods=['GET'])
-@role_required('user')  # 👈 Only regular users can access
-def user_route():
-    return jsonify({"message": "Hello User! You have access."})
