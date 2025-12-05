@@ -1,148 +1,173 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app, g
 from db import get_db_connection
-import jwt
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
+from middleware import login_required, role_required
 
 tasks_bp = Blueprint('tasks', __name__)
 
-# 🔐 JWT token verification
-def verify_token():
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        return None
-    try:
-        token = auth_header.split(" ")[1]
-        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        return decoded["user_id"]
-    except jwt.ExpiredSignatureError:
-        return "expired"
-    except Exception:
-        return None
+# Helper: convert DB row (tuple) to dict
+def row_to_task(row, cursor):
+    # depends on cursor.column_names
+    return dict(zip(cursor.column_names, row))
 
-# ✅ GET /tasks - Fetch all tasks
-@tasks_bp.route('/tasks', methods=['GET'])
-def get_tasks():
+@tasks_bp.route('/', methods=['GET'])
+@login_required
+def list_tasks():
+    """
+    Optional query params:
+      - assigned_to (user id)
+      - status (open/done)
+      - page, limit
+    """
+    assigned_to = request.args.get('assigned_to')
+    status = request.args.get('status')
+    page = int(request.args.get('page', 1))
+    limit = int(request.args.get('limit', 50))
+    offset = (page - 1) * limit
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB connection failed"}), 500
+
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM tasks")
-        tasks = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify(tasks)
+        cursor = conn.cursor()
+        sql = "SELECT id, title, description, status, assigned_to, created_at, updated_at FROM tasks WHERE 1=1"
+        params = []
+        if assigned_to:
+            sql += " AND assigned_to = %s"
+            params.append(assigned_to)
+        if status:
+            sql += " AND status = %s"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+        cursor.execute(sql, tuple(params))
+        rows = cursor.fetchall()
+        tasks = [row_to_task(row, cursor) for row in rows]
+        return jsonify({"tasks": tasks}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
-# ✅ GET /tasks/<id> - Fetch task by ID
-@tasks_bp.route('/tasks/<int:task_id>', methods=['GET'])
-def get_task(task_id):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
-        task = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        if task:
-            return jsonify(task)
-        else:
-            return jsonify({"error": "Task not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ✅ POST /tasks - Create a new task (🔐 Protected)
-@tasks_bp.route('/tasks', methods=['POST'])
+@tasks_bp.route('/', methods=['POST'])
+@login_required
 def create_task():
-    user_id = verify_token()
-    if user_id is None:
-        return jsonify({"error": "Unauthorized"}), 401
-    if user_id == "expired":
-        return jsonify({"error": "Token expired"}), 401
+    """
+    Body: { "title": "...", "description": "...", "assigned_to": <id> (optional) }
+    """
+    data = request.get_json() or {}
+    title = data.get('title')
+    description = data.get('description', '')
+    assigned_to = data.get('assigned_to')
+
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB connection failed"}), 500
 
     try:
-        data = request.get_json()
-        title = data.get("title")
-        description = data.get("description")
-
-        if not title or not description:
-            return jsonify({"error": "Title and description required"}), 400
-
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO tasks (title, description) VALUES (%s, %s)",
-            (title, description)
+            "INSERT INTO tasks (title, description, status, assigned_to, created_at, updated_at) VALUES (%s,%s,%s,%s,NOW(),NOW())",
+            (title, description, 'open', assigned_to)
         )
         conn.commit()
         task_id = cursor.lastrowid
-        cursor.close()
-        conn.close()
+        return jsonify({"message": "task created", "id": task_id}), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
-        return jsonify({
-            "id": task_id,
-            "title": title,
-            "description": description,
-            "status": "pending"
-        }), 201
+@tasks_bp.route('/<int:task_id>', methods=['GET'])
+@login_required
+def get_task(task_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB connection failed"}), 500
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, title, description, status, assigned_to, created_at, updated_at FROM tasks WHERE id=%s", (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"task": row_to_task(row, cursor)}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
-# ✅ PUT /tasks/<id> - Update a task (🔐 Protected)
-@tasks_bp.route('/tasks/<int:task_id>', methods=['PUT'])
+@tasks_bp.route('/<int:task_id>', methods=['PUT', 'PATCH'])
+@login_required
 def update_task(task_id):
-    user_id = verify_token()
-    if user_id is None:
-        return jsonify({"error": "Unauthorized"}), 401
-    if user_id == "expired":
-        return jsonify({"error": "Token expired"}), 401
+    """
+    Body may contain any of: title, description, status, assigned_to
+    """
+    data = request.get_json() or {}
+    allowed = ['title', 'description', 'status', 'assigned_to']
+    updates = {k: data[k] for k in allowed if k in data}
+    if not updates:
+        return jsonify({"error": "no fields to update"}), 400
 
+    set_clause = ", ".join([f"{k} = %s" for k in updates.keys()])
+    params = list(updates.values())
+    params.append(task_id)
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB connection failed"}), 500
     try:
-        data = request.get_json()
-        title = data.get("title")
-        description = data.get("description")
-        status = data.get("status")
-
-        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET title = %s, description = %s, status = %s WHERE id = %s",
-            (title, description, status, task_id)
-        )
+        sql = f"UPDATE tasks SET {set_clause}, updated_at = NOW() WHERE id = %s"
+        cursor.execute(sql, tuple(params))
         conn.commit()
-        updated = cursor.rowcount
-        cursor.close()
-        conn.close()
-
-        if updated == 0:
-            return jsonify({"error": "Task not found"}), 404
-        return jsonify({"message": "Task updated"})
+        if cursor.rowcount == 0:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"message": "updated"}), 200
     except Exception as e:
+        conn.rollback()
         return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
 
-# ✅ DELETE /tasks/<id> - Delete a task (🔐 Protected)
-@tasks_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
+@tasks_bp.route('/<int:task_id>', methods=['DELETE'])
+@role_required('admin')  # only admin can delete tasks
 def delete_task(task_id):
-    user_id = verify_token()
-    if user_id is None:
-        return jsonify({"error": "Unauthorized"}), 401
-    if user_id == "expired":
-        return jsonify({"error": "Token expired"}), 401
-
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "DB connection failed"}), 500
     try:
-        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        cursor.execute("DELETE FROM tasks WHERE id=%s", (task_id,))
         conn.commit()
-        deleted = cursor.rowcount
-        cursor.close()
-        conn.close()
-
-        if deleted == 0:
-            return jsonify({"error": "Task not found"}), 404
-        return jsonify({"message": "Task deleted"})
+        if cursor.rowcount == 0:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"message": "deleted"}), 200
     except Exception as e:
+        conn.rollback()
         return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+            conn.close()
+        except:
+            pass
