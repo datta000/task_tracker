@@ -16,7 +16,7 @@ def extract_token_from_header():
 
 def login_required(f):
     @wraps(f)
-    def wrapper(*xargs, **kwargs):
+    def wrapper(*args, **kwargs):
         token, resp, status = extract_token_from_header()
         if resp:
             return resp, status
